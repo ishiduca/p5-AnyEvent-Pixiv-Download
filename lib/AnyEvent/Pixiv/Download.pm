@@ -10,7 +10,7 @@ use Sub::Retry;
 use File::Basename;
 use YAML;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 my $www_pixiv_net = 'http://www.pixiv.net';
 my $login_php     = "${www_pixiv_net}/login.php";
@@ -48,7 +48,7 @@ sub login {
         recurse => 0,
         sub {
             my($body, $headers) = @_;
-            warn Dumper $headers             if $self->{verbose} == 2;
+            warn YAML::Dump $headers         if $self->{verbose} == 2;
             warn qq(fetch: "${login_php}"\n) if $self->{verbose} == 1;
 
             Carp::croak qq(! failed: "set-cookie" not found at $headers->{URL}\n)
@@ -57,7 +57,7 @@ sub login {
             $self->{cookie_jar} = _cookie_jar_hogehoge($headers->{'set-cookie'})
                 or Carp::croak qq(! failed: something wrong...\n);
 
-            warn Dumper $self->{cookie_jar}                   if $self->{verbose} == 2;
+            warn YAML::Dump $self->{cookie_jar}               if $self->{verbose} == 2;
             warn qq(get_cookie: "$headers->{'set-cookie'}"\n) if $self->{verbose} == 1;
 
             my $location = $headers->{'location'};
@@ -71,7 +71,7 @@ sub login {
                     Carp::croak qq(! failed: "redirect" failed\n  $headers->{URL}\n)
                         if $headers->{URL} ne $location;
 
-                    warn Dumper $headers                if $self->{verbose} == 2;
+                    warn YAML::Dump $headers            if $self->{verbose} == 2;
                     warn qq(fetch: "$headers->{URL}"\n) if $self->{verbose} == 1;
                     
                     undef $redirect;
@@ -98,7 +98,7 @@ sub prepare_download {
         cookie_jar => $self->{cookie_jar},
         sub {
             my($body, $headers) = @_;
-            warn Dumper $headers                if $self->{verbose} == 2;
+            warn YAML::Dump $headers            if $self->{verbose} == 2;
             warn qq(fetch: "$headers->{URL}"\n) if $self->{verbose} == 1;
 
             Carp::croak qq(! failed: something wrong...\n  $headers->{URL}\n)
@@ -116,7 +116,7 @@ sub prepare_download {
                         Carp::croak qq(! failed: something wrong...\n  $headers->{URL}\n)
                             if $headers->{URL} ne $information->{contents_url};
 
-                        warn Dumper $headers                if $self->{verbose} == 2;
+                        warn YAML::Dump $headers            if $self->{verbose} == 2;
                         warn qq(fetch: "$headers->{URL}"\n) if $self->{verbose} == 1;
 
                         if ($information->{contents_url} =~ /mode=manga/) {
@@ -134,7 +134,7 @@ sub prepare_download {
                         }
 
                         $self->{information_mode_medium}->{$illust_id} = $information;
-                        warn Dumper $information if $self->{verbose} == 2;
+                        warn YAML::Dump $information if $self->{verbose} == 2;
                         warn YAML::Dump $information if $self->{verbose} == 1;
 
                         undef $mode_big;
@@ -144,7 +144,7 @@ sub prepare_download {
                 );
             } else {
                 $self->{information_mode_medium}->{$illust_id} = $information;
-                warn Dumper $information if $self->{verbose} == 2;
+                warn YAML::Dump $information if $self->{verbose} == 2;
                 warn YAML::Dump $information if $self->{verbose} == 1;
 
                 undef $mode_medium;

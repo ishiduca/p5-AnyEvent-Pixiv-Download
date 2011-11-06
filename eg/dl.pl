@@ -18,6 +18,7 @@ my $cv = AE::cv;
 my $client = AnyEvent::Pixiv::Download->new(
     pixiv_id => $config->{pixiv_id},
     pass     => $config->{pass},
+    verbose  => 2,
 );
 
 for my $illust_id (@ARGV) {
