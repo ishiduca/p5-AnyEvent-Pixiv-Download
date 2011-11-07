@@ -6,11 +6,10 @@ use Carp;
 use AnyEvent;
 use AnyEvent::HTTP;
 use Web::Scraper;
-use Sub::Retry;
 use File::Basename;
 use YAML;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 my $www_pixiv_net = 'http://www.pixiv.net';
 my $login_php     = "${www_pixiv_net}/login.php";
@@ -23,10 +22,10 @@ sub new {
 
     my $self  = bless {}, $class;
 
-    $self->{pixiv_id}   = delete $args{pixiv_id} || Carp::croak qq(! faild: "pixiv_id" not found);
-    $self->{pass}       = delete $args{pass}     || Carp::croak qq(! failed: "pass" not found);
-    $self->{verbose}    = delete $args{verbose}  || 1;
-    $self->{retry}      = delete $args{retry}    || 3;
+    $self->{pixiv_id} = delete $args{pixiv_id} || Carp::croak qq(! faild: "pixiv_id" not found);
+    $self->{pass}     = delete $args{pass}     || Carp::croak qq(! failed: "pass" not found);
+    $self->{verbose}  = delete $args{verbose}  || 1;
+    $self->{retry}    = delete $args{retry}    || 3;
     #$self->{cookie_jar} = {};
     #$self->{information_mode_medium} = {};
 
@@ -135,7 +134,7 @@ sub prepare_download {
 
                         $self->{information_mode_medium}->{$illust_id} = $information;
                         warn YAML::Dump $information if $self->{verbose} == 2;
-                        warn YAML::Dump $information if $self->{verbose} == 1;
+                        #warn YAML::Dump $information if $self->{verbose} == 1;
 
                         undef $mode_big;
                         undef $mode_medium;
@@ -145,7 +144,7 @@ sub prepare_download {
             } else {
                 $self->{information_mode_medium}->{$illust_id} = $information;
                 warn YAML::Dump $information if $self->{verbose} == 2;
-                warn YAML::Dump $information if $self->{verbose} == 1;
+                #warn YAML::Dump $information if $self->{verbose} == 1;
 
                 undef $mode_medium;
                 $cb->($information);
@@ -163,9 +162,19 @@ sub download {
     my $illust_id = shift || Carp::croak qq(! failed: "illust_id" not found\n);
     my $options   = shift;
 
-    $self->login unless $self->{cookie_jar};
+    my $c = $self->{retry};
+    my($voodoo, $done, $on_body, $on_header, $cb_);
 
-    my $on_body = ($options->{on_body}) ? $options->{on_body} : (sub {
+    $on_header = ($options->{on_header}) ? $options->{on_header} : sub {
+        my $headers = shift;
+        if ($headers->{Status} ne '200') {
+            ($options->{on_error} || sub { die @_ })->(qq(failed: "${img_src}" $headers->{Status} $headers->{Reason}\n));
+            return ;
+        }
+        return 1;
+    };
+
+    $on_body = ($options->{on_body}) ? $options->{on_body} : (sub {
         my $filename = (basename($img_src) =~ /^([^\?]+)/)[0];
         open my $fh, '>', $filename or Carp::croak qq(! failed: "${filename}" $!\n);
         binmode $fh;
@@ -178,31 +187,34 @@ sub download {
         };
     })->();
 
-    my $on_header = ($options->{on_header}) ? $options->{on_header} : sub {
-        my $headers = shift;
-        if ($headers->{Status} ne '200') {
-            ($options->{on_error} || sub { die @_ })->(qq(failed: "${img_src}" $headers->{Status} $headers->{Reason}\n));
-            return ;
+    $cb_ = sub {
+        my($body, $headers) = @_;
+        undef $done;
+        if (! -s $body && $c > 0) {
+            --$c;
+            my $timer; $timer  = AE::timer 1, 1, sub {
+                undef $timer;
+                $voodoo->();
+                return;
+            };
         }
-        return 1;
+        $cb->(@_);
     };
 
-    my $c = 0;
-    my $res = retry $self->{retry}, 1, sub {
-        ++$c;
-        warn qq(  try $c times to fetch: $img_src\n) if $self->{verbose} > 0;
-        my $done; $done = http_request('GET' => $img_src,
+    $voodoo = sub {
+        warn qq( --> try ${c}/$self->{retry} times: "${img_src}"\n) if $self->{verbose} > 0;
+        $self->login unless $self->{cookie_jar};
+
+        $done = http_request('GET' => $img_src,
             cookie_jar => $self->{cookie_jar},
             headers    => { referer => $self->{information_mode_medium}->{$illust_id}->{illust_top_url} },
             on_header  => $on_header,
             on_body    => $on_body,
-            sub {
-                my($body, $headers) = @_;
-                undef $done;
-                $cb->(@_);
-            }
+            $cb_
         );
     };
+
+    $voodoo->();
 
     return $self;
 }

@@ -9,7 +9,6 @@ all_from 'lib/AnyEvent/Pixiv/Download.pm';
 requires 'AnyEvent';
 requires 'AnyEvent::HTTP';
 requires 'Web::Scraper';
-requires 'Sub::Retry';
 requires 'File::Basename';
 requires 'YAML';
 
