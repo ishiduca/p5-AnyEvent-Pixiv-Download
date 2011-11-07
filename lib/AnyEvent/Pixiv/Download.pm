@@ -9,7 +9,7 @@ use Web::Scraper;
 use File::Basename;
 use YAML;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 my $www_pixiv_net = 'http://www.pixiv.net';
 my $login_php     = "${www_pixiv_net}/login.php";
@@ -190,15 +190,16 @@ sub download {
     $cb_ = sub {
         my($body, $headers) = @_;
         undef $done;
-        if (! -s $body && $c > 0) {
+        if (!($headers->{'content-length'} > 0)  && $c > 0) {
             --$c;
             my $timer; $timer  = AE::timer 1, 1, sub {
                 undef $timer;
                 $voodoo->();
                 return;
             };
+        } else {
+            $cb->(@_);
         }
-        $cb->(@_);
     };
 
     $voodoo = sub {
