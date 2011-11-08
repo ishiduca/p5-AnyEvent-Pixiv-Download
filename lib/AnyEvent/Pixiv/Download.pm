@@ -9,7 +9,7 @@ use Web::Scraper;
 use File::Basename;
 use YAML;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 my $www_pixiv_net = 'http://www.pixiv.net';
 my $login_php     = "${www_pixiv_net}/login.php";
@@ -29,12 +29,12 @@ sub new {
     #$self->{cookie_jar} = {};
     #$self->{information_mode_medium} = {};
 
-    $self->login;
+    $self->_login;
 
     return $self;
 }
 
-sub login {
+sub _login {
     my $self = shift;
 
     $self->{pixiv_id} or Carp::croak qq(! failed: "pixiv_id" not found\n);
@@ -63,24 +63,40 @@ sub login {
 
             undef $login;
 
-            my $redirect; $redirect = http_request('GET' => $location,
-                cookie_jar => $self->{cookie_jar},
-                sub {    
-                    my($body, $headers) = @_;
-                    Carp::croak qq(! failed: "redirect" failed\n  $headers->{URL}\n)
-                        if $headers->{URL} ne $location;
+            $self->get($location, sub {
+                my($body, $headers) = @_;
+                Carp::croak qq(! failed: "redirect" failed\n  $headers->{URL}\n)
+                    if $headers->{URL} ne $location;
 
-                    warn YAML::Dump $headers            if $self->{verbose} == 2;
-                    warn qq(fetch: "$headers->{URL}"\n) if $self->{verbose} == 1;
-                    
-                    undef $redirect;
-                    $sub_cv->send("ok : login !\n");
-                }
-            );
+                warn YAML::Dump $headers            if $self->{verbose} == 2;
+                warn qq(fetch: "$headers->{URL}"\n) if $self->{verbose} == 1;
+        
+                $sub_cv->send("ok : login !\n");        
+            });
         }
     );
     my $message = $sub_cv->recv;
     warn $message;
+
+    return $self;
+}
+
+sub get {
+    my $self = shift;
+    my $uri  = shift || Carp::croak qq(! failed: "uri" not found\n);
+    my $cb   = pop   || Carp::croak qq(! failed: "cb" not found\n);
+    my %args = @_;
+
+    $self->_login unless $self->{cookie_jar};
+
+    my $get; $get = http_request('GET' => $uri,
+        cookie_jar => $self->{cookie_jar},
+        %args,
+        sub {
+            undef $get;
+            $cb->(@_);
+        }
+    );
 
     return $self;
 }
@@ -91,10 +107,7 @@ sub prepare_download {
     my $illust_id = shift || Carp::croak qq(! failed: "illust_id" not found\n);
     my $deep      = shift;
 
-    $self->login unless $self->{cookie_jar};
-
-    my $mode_medium; $mode_medium = http_request('GET', "${illust_top}${illust_id}",
-        cookie_jar => $self->{cookie_jar},
+    $self->get("${illust_top}${illust_id}",
         sub {
             my($body, $headers) = @_;
             warn YAML::Dump $headers            if $self->{verbose} == 2;
@@ -106,8 +119,7 @@ sub prepare_download {
             my $information  = _scrape_mode_medium($body, $headers->{URL});
 
             if ($deep) {
-                my $mode_big; $mode_big = http_request('GET', $information->{contents_url},
-                    cookie_jar => $self->{cookie_jar},
+                $self->get($information->{contents_url},
                     headers    => { referer => $headers->{URL} },
                     sub {
                         my($body, $headers) = @_;
@@ -134,19 +146,14 @@ sub prepare_download {
 
                         $self->{information_mode_medium}->{$illust_id} = $information;
                         warn YAML::Dump $information if $self->{verbose} == 2;
-                        #warn YAML::Dump $information if $self->{verbose} == 1;
 
-                        undef $mode_big;
-                        undef $mode_medium;
                         $cb->($information);
                     }
                 );
             } else {
                 $self->{information_mode_medium}->{$illust_id} = $information;
                 warn YAML::Dump $information if $self->{verbose} == 2;
-                #warn YAML::Dump $information if $self->{verbose} == 1;
 
-                undef $mode_medium;
                 $cb->($information);
             }
         }
@@ -162,14 +169,14 @@ sub download {
     my $illust_id = shift || Carp::croak qq(! failed: "illust_id" not found\n);
     my $options   = shift;
 
-    my $c = $self->{retry};
-    my($voodoo, $done, $on_body, $on_header, $cb_);
+    my $c = 0;
+    my($voodoo, $on_body, $on_header, $cb_);
 
     $on_header = ($options->{on_header}) ? $options->{on_header} : sub {
         my $headers = shift;
         if ($headers->{Status} ne '200') {
             ($options->{on_error} || sub { die @_ })->(qq(failed: "${img_src}" $headers->{Status} $headers->{Reason}\n));
-            return ;
+            return;
         }
         return 1;
     };
@@ -182,16 +189,16 @@ sub download {
             my($partial_body, $headers) = @_;
             if ($headers->{Status} =~ /^2/) {
                 print $fh $partial_body;
+                return 1;
             }
-            return 1;
+            return;
         };
     })->();
 
     $cb_ = sub {
         my($body, $headers) = @_;
-        undef $done;
-        if (!($headers->{'content-length'} > 0)  && $c > 0) {
-            --$c;
+        if (!($headers->{'content-length'} > 0)  && $self->{retry} > $c) {
+            ++$c;
             my $timer; $timer  = AE::timer 1, 1, sub {
                 undef $timer;
                 $voodoo->();
@@ -204,13 +211,11 @@ sub download {
 
     $voodoo = sub {
         warn qq( --> try ${c}/$self->{retry} times: "${img_src}"\n) if $self->{verbose} > 0;
-        $self->login unless $self->{cookie_jar};
 
-        $done = http_request('GET' => $img_src,
-            cookie_jar => $self->{cookie_jar},
-            headers    => { referer => $self->{information_mode_medium}->{$illust_id}->{illust_top_url} },
-            on_header  => $on_header,
-            on_body    => $on_body,
+        $self->get($img_src,
+            headers   => { referer => $self->{information_mode_medium}->{$illust_id}->{illust_top_url} },
+            on_body   => $on_body,
+            on_header => $on_header,
             $cb_
         );
     };
@@ -337,9 +342,9 @@ These parameters are set as needed.
  "1", show fetching process, "2", more detail process.
 
 
-=item B<login>
+=item B<get($uri, %options, $cb)>
 
-if cookie expired, use this method.
+this method is wrap object of AnyEvent::HTTP::http_get.
 
 
 =item B<prepare_download($illust_id[, 'deep'], \&cb)>
@@ -360,18 +365,18 @@ This callback function is required.
 =item $information
 
 if used YAML::Dump then
----
+
   author:
     name: author name
     url: http://www.pixiv.net/member.php?id=user_id_number
-    contents:
-      - http://imgNN.pixiv.net/img/user_id/origin_size_img.src
-    contents_url: http://www.pixiv.net/member_illust.php?mode=(manga|big)&illust_id=12345678
-    description: description of works
-    illust_top_url: http://www.pixiv.net/member_illust.php?mode=medium&illust_id=12345678
-    img_src: http://imgNN.pixiv.net/img/user_id/medium_size_img.src
-    mode: (manga|big)
-    title: title of works
+  contents:
+    - http://imgNN.pixiv.net/img/user_id/origin_size_img.src
+  contents_url: http://www.pixiv.net/member_illust.php?mode=(manga|big)&illust_id=12345678
+  description: description of works
+  illust_top_url: http://www.pixiv.net/member_illust.php?mode=medium&illust_id=12345678
+  img_src: http://imgNN.pixiv.net/img/user_id/medium_size_img.src
+  mode: (manga|big)
+  title: title of works
 
 
 =item B<download($img_src, $illust_id, \%options, \&cb)>
